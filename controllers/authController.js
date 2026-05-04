@@ -1,69 +1,69 @@
 import User from "../models/User.js";
-import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import sendEmail from "../utils/sendEmail.js";
 
+// FORGOT PASSWORD CONTROLLER
 export const forgotPassword = async (req, res) => {
   try {
-    let { email } = req.body;
+    console.log("FORGOT PASSWORD API HIT");
 
-    // normalize email
-    email = email.trim().toLowerCase();
+    const { email } = req.body;
 
-    const user = await User.findOne({
-      email: { $regex: new RegExp("^" + email + "$", "i") }
-    });
-
-    // don't reveal user existence
-    if (!user) {
-      return res.json({ msg: "If this email exists, reset link was sent" });
+    if (!email) {
+      return res.status(400).json({
+        msg: "Email is required"
+      });
     }
 
-    const token = crypto.randomBytes(32).toString("hex");
+    // 1. Check user exists
+    const user = await User.findOne({ email });
 
-    user.resetToken = token;
-    user.resetTokenExpiry = Date.now() + 15 * 60 * 1000;
-
-    await user.save();
-
-    const link = `${process.env.CLIENT_URL}/reset/${token}`;
-
-    await sendEmail(email, "Password Reset", link);
-
-    res.json({ msg: "If this email exists, reset link was sent" });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ msg: "Server error" });
-  }
-};
-
-export const resetPassword = async (req, res) => {
-  try {
-    const { token } = req.params;
-    const { password } = req.body;
-
-    const user = await User.findOne({
-      resetToken: token,
-      resetTokenExpiry: { $gt: Date.now() }
-    });
-
+    // IMPORTANT: Always send same response (security practice)
     if (!user) {
-      return res.status(400).json({ msg: "Invalid or expired token" });
+      return res.status(200).json({
+        msg: "If this email exists, reset link was sent"
+      });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // 2. Generate reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
 
-    user.password = hashedPassword;
-    user.resetToken = null;
-    user.resetTokenExpiry = null;
+    // 3. Set expiry (1 hour)
+    const resetTokenExpiry = Date.now() + 60 * 60 * 1000;
 
+    // 4. Save token in DB
+    user.resetToken = resetToken;
+    user.resetTokenExpiry = resetTokenExpiry;
     await user.save();
 
-    res.json({ msg: "Password updated successfully" });
+    console.log("TOKEN GENERATED");
+
+    // 5. Reset link
+    const resetLink = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+
+    // 6. SEND EMAIL (wrapped safely so it won't crash API)
+    try {
+      await sendEmail(
+        email,
+        "Password Reset",
+        `Click here to reset your password: ${resetLink}`
+      );
+      console.log("EMAIL SENT");
+    } catch (emailError) {
+      console.log("EMAIL FAILED (IGNORED):", emailError.message);
+      // IMPORTANT: We do NOT crash API if email fails
+    }
+
+    // 7. Response (ALWAYS RETURNS)
+    return res.status(200).json({
+      msg: "If this email exists, reset link was sent"
+    });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ msg: "Server error" });
+    console.log("FATAL ERROR:", error);
+
+    return res.status(500).json({
+      msg: "Server error"
+    });
   }
 };
